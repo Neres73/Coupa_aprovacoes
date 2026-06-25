@@ -1,19 +1,26 @@
 """
 Coupa - Aprovação de Requisições
-Filtra requisições SGM exigindo aprovação e aprova as abaixo de R$10.000.
+Filtra requisições SGM com aprovação pendente e aprova as abaixo do limite.
 
   Primeiro uso (login manual):   python main.py --login
   Uso normal (já logado):        python main.py
+
+Configure as variáveis no arquivo .env (veja .env.example)
 """
 
+import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, Page, BrowserContext, TimeoutError as PlaywrightTimeoutError
 
-COUPA_URL     = "https://gpabr.coupahost.com/user/home"
-LIMITE_VALOR  = 10_000.00
-USER_DATA_DIR = Path("./perfil_navegador").resolve()
+load_dotenv()
+
+COUPA_URL     = os.getenv("COUPA_URL", "https://gpabr.coupahost.com/user/home")
+LIMITE_VALOR  = float(os.getenv("LIMITE_VALOR", "10000"))
+APROVADOR     = os.getenv("APROVADOR", "")
+USER_DATA_DIR = Path(os.getenv("USER_DATA_DIR", "./perfil_navegador")).resolve()
 USER_DATA_DIR.mkdir(exist_ok=True, parents=True)
 
 
@@ -29,7 +36,7 @@ def fazer_login_manual(context: BrowserContext) -> None:
 
 
 # ============================================================================
-# ETAPA 1 — Navegar para requisições e aplicar filtros SGM
+# ETAPA 1 — Navegar para requisições e aplicar filtros
 # ============================================================================
 def navegar_para_requisicoes(page: Page) -> None:
     """Abre o Coupa e vai até a página de requisições. Roda só uma vez."""
@@ -104,7 +111,6 @@ def aplicar_filtros_sgm(page: Page) -> None:
         filtros.nth(1).select_option(value="status", force=True)
         page.wait_for_timeout(2_000)
 
-    # Status é um select múltiplo — verifica se pending_approval já está selecionado
     status_sel = page.locator("select[aria-label='Filtrar valor']").first
     valores_status = page.evaluate("el => Array.from(el.selectedOptions).map(o => o.value)",
                                    status_sel.element_handle())
@@ -113,34 +119,33 @@ def aplicar_filtros_sgm(page: Page) -> None:
         page.wait_for_timeout(300)
 
     # ════════════════════════════════════════════════════════════════════
-    # FILTRO 3 — Nome do aprovador atual | contém | Carlos Henrique
+    # FILTRO 3 — Nome do aprovador atual | contém | APROVADOR (.env)
     # ════════════════════════════════════════════════════════════════════
-    print("Verificando filtro 3 (Nome do aprovador atual)...")
-    if filtros.count() < 3:
-        print("  Adicionando novo filtro...")
-        page.locator("img.sprite-add[title*='grupo 1']").first.click()
-        page.wait_for_timeout(1_500)
+    if APROVADOR:
+        print("Verificando filtro 3 (Nome do aprovador atual)...")
+        if filtros.count() < 3:
+            print("  Adicionando novo filtro...")
+            page.locator("img.sprite-add[title*='grupo 1']").first.click()
+            page.wait_for_timeout(1_500)
 
-    if filtros.nth(2).evaluate("el => el.value") != "current_approver_association.fullname":
-        filtros.nth(2).select_option(value="current_approver_association.fullname", force=True)
-        page.wait_for_timeout(3_000)  # aguarda AJAX atualizar o operador
+        if filtros.nth(2).evaluate("el => el.value") != "current_approver_association.fullname":
+            filtros.nth(2).select_option(value="current_approver_association.fullname", force=True)
+            page.wait_for_timeout(3_000)
 
-    op3 = page.locator("select.cond_comparator").nth(1)
-    if op3.evaluate("el => el.value") != "con":
-        op3.select_option(value="con", force=True)
-        page.wait_for_timeout(300)
+        op3 = page.locator("select.cond_comparator").nth(1)
+        if op3.evaluate("el => el.value") != "con":
+            op3.select_option(value="con", force=True)
+            page.wait_for_timeout(300)
 
-    txt3 = page.locator("input[aria-label='Filtrar texto']").nth(1)
-    if txt3.evaluate("el => el.value") != "Carlos Henrique":
-        txt3.fill("Carlos Henrique", force=True)
+        txt3 = page.locator("input[aria-label='Filtrar texto']").nth(1)
+        if txt3.evaluate("el => el.value") != APROVADOR:
+            txt3.fill(APROVADOR, force=True)
 
     # ── Pesquisar ────────────────────────────────────────────────────────
     print("Clicando em Pesquisar...")
     page.click("#search_advanced_button_requisition_header")
     page.wait_for_load_state("load")
     print("✅ Filtros aplicados — lista carregada.")
-
-
 
 
 # ============================================================================
@@ -169,16 +174,15 @@ def processar_requisicoes(page: Page) -> None:
     erros     = []
 
     if not ids:
-        print("Nenhuma requisição SGM encontrada na fila de aprovação.")
+        print("Nenhuma requisição encontrada na fila de aprovação.")
     else:
         for req_id in ids:
-            url_req = f"https://gpabr.coupahost.com/approver/{req_id}/edit"
+            url_req = f"{COUPA_URL.replace('/user/home', '')}/approver/{req_id}/edit"
             print(f"\nProcessando requisição {req_id}...")
 
             try:
                 page.goto(url_req, wait_until="load")
 
-                # ── Verificar se botão Aprovar existe (3s) ───────────────
                 botao_aprovar = page.locator("span:text-is('Aprovar')").first
                 try:
                     botao_aprovar.wait_for(timeout=3_000)
@@ -187,7 +191,6 @@ def processar_requisicoes(page: Page) -> None:
                     puladas.append((req_id, 0))
                     continue
 
-                # ── Ler o valor total ────────────────────────────────────
                 locator_valor = page.locator(".priceInfo .lineTotal").first
                 locator_valor.wait_for(timeout=10_000)
                 valor = parsear_valor_brl(locator_valor.inner_text().strip())
@@ -198,7 +201,6 @@ def processar_requisicoes(page: Page) -> None:
                     puladas.append((req_id, valor))
                     continue
 
-                # ── Aprovar ──────────────────────────────────────────────
                 botao_aprovar.click()
                 page.wait_for_load_state("load")
                 page.wait_for_timeout(1_000)
@@ -235,7 +237,6 @@ def processar_requisicoes(page: Page) -> None:
             print(f"    • {req_id}  →  {motivo}")
 
     print("=" * 52)
-
     print("Voltando à tela inicial do Coupa...")
     page.goto(COUPA_URL, wait_until="load")
 
@@ -258,7 +259,6 @@ def main() -> None:
             context.close()
             return
 
-        # Mantém a primeira aba, fecha as extras
         if context.pages:
             page = context.pages[0]
             for aba in list(context.pages[1:]):
@@ -269,8 +269,8 @@ def main() -> None:
         else:
             page = context.new_page()
 
-        navegar_para_requisicoes(page)   # abre Coupa e vai até a página (só uma vez)
-        aplicar_filtros_sgm(page)        # aplica filtros SGM
+        navegar_para_requisicoes(page)
+        aplicar_filtros_sgm(page)
         processar_requisicoes(page)
 
         input("\nPressione ENTER para fechar o browser...")
