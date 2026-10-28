@@ -1,174 +1,119 @@
-# Coupa — Aprovação Automatizada de Requisições
+# Coupa — Aprovação de Requisições por Limite de Valor
 
-Automação em Python + Playwright que percorre a fila de requisições com aprovação pendente em um portal Coupa, aplica a regra de alçada configurada e aprova apenas o que está dentro do limite — registrando tudo em um relatório auditável.
+Script em Python + Playwright que abre a fila de requisições com aprovação pendente no Coupa, aprova as que estão abaixo de um limite de valor e deixa as demais para análise manual.
 
-> Processo antes executado manualmente, requisição a requisição, passou a ser concluído em segundos por lote, sem intervenção humana.
-
----
-
-## Contexto
-
-Em um fluxo de compras corporativo, requisições de baixo valor de um mesmo solicitante se acumulam aguardando aprovação manual. A conferência é repetitiva (abrir, ler valor, aprovar, voltar), mas não é trivial: aprovar algo acima da alçada gera compromisso financeiro indevido.
-
-A automação resolve a parte repetitiva **sem abrir mão do controle**: tudo acima do limite é deliberadamente ignorado e reportado para decisão humana.
+Uso no meu trabalho, no back-office de Manutenção, para as requisições abertas pelo sistema de chamados que ficam aguardando a minha aprovação.
 
 ---
 
-## Como funciona
+## Por que existe
 
-1. Abre o portal e navega até a listagem de requisições
-2. Aplica três filtros combinados por `AND`:
-   - Solicitante contém o identificador configurado
-   - Status igual a "Aprovação pendente"
-   - Aprovador atual contém o nome configurado
-3. Para cada requisição da fila:
-   - Verifica se a ação de aprovar está disponível
-   - Lê e converte o valor total
-   - Abaixo do limite → aprova
-   - Igual ou acima do limite → registra como pendente e segue adiante
-4. Emite o relatório final (aprovadas, pendentes, erros)
-5. Retorna à tela inicial
+Essas requisições chegam em volume e a conferência é sempre a mesma: abrir, ler o valor, aprovar, voltar para a lista. O script faz essa parte repetitiva, mas **só aprova o que está abaixo do limite**. Todo o resto continua passando por uma pessoa.
 
 ---
 
-## Stack
+## O que o script faz
 
-| Camada | Tecnologia |
-|---|---|
-| Linguagem | Python 3.10+ |
-| Automação de navegador | Playwright (contexto persistente) |
-| Configuração | Variáveis de ambiente (`python-dotenv`) |
+1. Abre o Coupa (com a sessão já salva) e vai até a lista de requisições
+2. Monta a busca avançada com três filtros combinados (todas as condições):
+   - **Solicitado por** contém o valor de `FILTRO_SOLICITANTE`
+   - **Status** = Aprovação pendente
+   - **Nome do aprovador atual** contém o valor de `APROVADOR` (opcional)
+   - Antes de mexer em cada filtro, confere se ele já está certo, para não recarregar a lista à toa
+3. Para cada requisição da lista:
+   - Abre a tela de aprovação; se não houver botão **Aprovar**, pula
+   - Lê o valor e converte do formato brasileiro (`1.234,56`)
+   - **Abaixo do limite** → aprova
+   - **Igual ou acima** → não toca, só registra
+   - **Qualquer erro** (valor ilegível, tela que não carregou) → não aprova e registra o motivo
+4. Mostra no terminal o resumo: aprovadas, pendentes e erros, com número e valor de cada uma
+
+---
+
+## Exemplo de saída
+
+```
+====================================================
+📋  RELATÓRIO FINAL
+====================================================
+  Total processado : 5
+  ✅ Aprovadas      : 3
+  ⏭️  Pendentes      : 1  (valor >= R$ 10,000.00)
+  ❌ Erros          : 1
+
+  Aprovadas:
+    • 300001  →  R$ 1,250.00
+    • 300002  →  R$ 3,980.50
+    • 300003  →  R$ 820.00
+
+  Pendentes (acima do limite):
+    • 300004  →  R$ 15,400.00
+====================================================
+```
+*(números fictícios)*
 
 ---
 
 ## Instalação
+
+Requisitos: Python 3.10+ e Microsoft Edge.
 
 ```bash
 git clone https://github.com/Neres73/Coupa_aprovacoes.git
 cd Coupa_aprovacoes
 
 python -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+.venv\Scripts\activate            # Linux/Mac: source .venv/bin/activate
 
 pip install -r requirements.txt
 playwright install msedge
 ```
 
----
-
 ## Configuração
 
-Toda a configuração é feita por variáveis de ambiente — **nenhum dado de ambiente corporativo fica versionado**.
-
-Copie o modelo e preencha com os valores do seu ambiente:
+Copie o modelo e preencha com os dados do seu ambiente:
 
 ```bash
-cp .env.example .env
+copy .env.example .env            # Linux/Mac: cp .env.example .env
 ```
 
-```env
-COUPA_URL=https://seu-ambiente.coupahost.com/user/home
-LIMITE_VALOR=10000.00
-FILTRO_SOLICITANTE=PREFIXO
-FILTRO_APROVADOR=Nome do Aprovador
-USER_DATA_DIR=./perfil_navegador
-```
-
-| Variável | Descrição | Padrão |
+| Variável | O que é | Padrão |
 |---|---|---|
-| `COUPA_URL` | URL base do ambiente Coupa | — (obrigatória) |
-| `LIMITE_VALOR` | Alçada máxima para aprovação automática | `10000.00` |
-| `FILTRO_SOLICITANTE` | Texto buscado no campo "Solicitado por" | — (obrigatória) |
-| `FILTRO_APROVADOR` | Texto buscado no campo "Aprovador atual" | — (obrigatória) |
-| `USER_DATA_DIR` | Pasta do perfil de navegador com a sessão salva | `./perfil_navegador` |
+| `COUPA_URL` | Página inicial do seu Coupa | obrigatória |
+| `LIMITE_VALOR` | Requisições abaixo deste valor são aprovadas | `10000` |
+| `FILTRO_SOLICITANTE` | Texto buscado em "Solicitado por" | `SGM` |
+| `APROVADOR` | Texto buscado em "Nome do aprovador atual" | vazio (filtro não é usado) |
+| `USER_DATA_DIR` | Pasta do perfil do navegador com a sessão | `./perfil_navegador` |
 
----
+O `.env` e a pasta do perfil estão no `.gitignore` e nunca vão para o repositório.
 
 ## Uso
 
-### Primeira execução — autenticação
-
 ```bash
-python main.py --login
+python main.py --login    # 1ª vez: abre o Edge para você fazer login; a sessão fica salva
+python main.py            # execuções seguintes
 ```
 
-Abre o navegador para login manual. A sessão fica persistida em `USER_DATA_DIR` e é reaproveitada nas execuções seguintes — a automação **nunca manipula credenciais**.
-
-### Execução normal
-
-```bash
-python main.py
-```
-
-### Simulação (recomendado antes de rodar em volume)
-
-```bash
-python main.py --dry-run
-```
-
-Percorre a fila e monta o relatório sem executar nenhuma aprovação.
+O script **não lê, guarda nem digita senha**. Se a sessão expirar, é só rodar `--login` de novo.
 
 ---
 
-## Relatório
+## Limitações
 
-```
-====================================================
-  RELATORIO FINAL
-====================================================
-  Total processado : 5
-  Aprovadas        : 3
-  Pendentes        : 1  (valor >= limite configurado)
-  Erros            : 1
-
-  Aprovadas:
-    • 3068XX  →  R$ 5.998,00
-    • 3071XX  →  R$ 3.200,00
-    • 3072XX  →  R$ 8.750,00
-
-  Pendentes (acima do limite):
-    • 3075XX  →  R$ 15.000,00
-====================================================
-```
-
----
-
-## Decisões técnicas
-
-- **Contexto persistente do Playwright** em vez de automatizar o login: credenciais nunca passam pelo código, e a sessão sobrevive entre execuções.
-- **Fail-safe no limite de alçada**: qualquer falha na leitura ou conversão do valor faz a requisição ser tratada como pendente, nunca como aprovável. O erro seguro é não aprovar.
-- **Filtros verificados antes de aplicados**: o estado atual do formulário é lido e só reescrito se estiver divergente, evitando recarregamentos desnecessários da listagem.
-- **Relatório por execução**: cada corrida devolve o que foi aprovado, o que foi deixado para decisão humana e o que falhou — rastreabilidade mínima para um processo que movimenta valor.
-- **Erros isolados por item**: uma falha em uma requisição não interrompe o lote.
-
----
-
-## Limitações e próximos passos
-
-- Depende da estrutura de DOM do portal — mudanças de layout exigem ajuste dos seletores
-- Sem suíte de testes automatizados; o `--dry-run` cobre a validação manual hoje
-- Relatório apenas em terminal — exportação para CSV/log persistente é a próxima evolução
-- Alçada única; regras por centro de custo ou categoria ainda não são suportadas
-
----
+- Os seletores são da interface do Coupa em português no ambiente onde o script foi feito; outro ambiente pode exigir ajustes
+- O resumo sai só no terminal (não gera arquivo)
+- Um limite único para todas as requisições; não há regra por categoria ou centro de custo
+- Sem modo de simulação: rodar o script **aprova de verdade** o que estiver abaixo do limite
 
 ## Estrutura
 
 ```
-.
-├── main.py            # fluxo principal: filtros, iteração e regra de alçada
+├── main.py            # filtros, leitura do valor, regra de aprovação e resumo
 ├── requirements.txt
 ├── .env.example       # modelo de configuração
-├── .gitignore         # ignora .env e o perfil de navegador
-└── README.md
+└── .gitignore
 ```
 
 ---
 
-## Licença
-
-MIT — ver [LICENSE](LICENSE).
-
----
-
-Projeto pessoal desenvolvido a partir de uma necessidade real de trabalho. Nenhuma URL, credencial ou dado de ambiente corporativo está versionado neste repositório.
+Desenvolvido por [Gustavo Neres](https://github.com/Neres73), com apoio do Claude (IA) para modelar a lógica, escrever e revisar o código. Projeto compartilhado como portfólio: nenhuma URL, credencial ou dado da empresa está no repositório. Licença MIT.

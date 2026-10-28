@@ -1,6 +1,7 @@
 """
 Coupa - Aprovação de Requisições
-Filtra requisições SGM com aprovação pendente e aprova as abaixo do limite.
+Filtra as requisições com aprovação pendente de um solicitante e aprova as
+que estão abaixo do limite de valor configurado.
 
   Primeiro uso (login manual):   python main.py --login
   Uso normal (já logado):        python main.py
@@ -17,8 +18,9 @@ from playwright.sync_api import sync_playwright, Page, BrowserContext, TimeoutEr
 
 load_dotenv()
 
-COUPA_URL     = os.getenv("COUPA_URL", "https://gpabr.coupahost.com/user/home")
+COUPA_URL     = os.getenv("COUPA_URL", "")
 LIMITE_VALOR  = float(os.getenv("LIMITE_VALOR", "10000"))
+SOLICITANTE   = os.getenv("FILTRO_SOLICITANTE", "SGM")
 APROVADOR     = os.getenv("APROVADOR", "")
 USER_DATA_DIR = Path(os.getenv("USER_DATA_DIR", "./perfil_navegador")).resolve()
 USER_DATA_DIR.mkdir(exist_ok=True, parents=True)
@@ -82,7 +84,7 @@ def aplicar_filtros_sgm(page: Page) -> None:
     filtros = page.locator("[data-cond-col-select='true']")
 
     # ════════════════════════════════════════════════════════════════════
-    # FILTRO 1 — Solicitado por | contém | SGM
+    # FILTRO 1 — Solicitado por | contém | SOLICITANTE (.env)
     # ════════════════════════════════════════════════════════════════════
     print("Verificando filtro 1 (Solicitado por)...")
     if filtros.nth(0).evaluate("el => el.value") != "requested_by":
@@ -95,8 +97,8 @@ def aplicar_filtros_sgm(page: Page) -> None:
         page.wait_for_timeout(300)
 
     txt1 = page.locator("input[aria-label='Filtrar texto']").nth(0)
-    if txt1.evaluate("el => el.value") != "SGM":
-        txt1.fill("SGM", force=True)
+    if txt1.evaluate("el => el.value") != SOLICITANTE:
+        txt1.fill(SOLICITANTE, force=True)
 
     # ════════════════════════════════════════════════════════════════════
     # FILTRO 2 — Status | Aprovação pendente
@@ -246,6 +248,9 @@ def processar_requisicoes(page: Page) -> None:
 # ============================================================================
 def main() -> None:
     modo_login = "--login" in sys.argv
+
+    if not COUPA_URL:
+        sys.exit("COUPA_URL não configurada. Copie o .env.example para .env e preencha.")
 
     with sync_playwright() as p:
         context = p.chromium.launch_persistent_context(
