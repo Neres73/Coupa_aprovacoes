@@ -1,2 +1,7 @@
-playwright>=1.40
-python-dotenv>=1.0
+playwright
+python-dotenv
+openpyxl
+# Interface
+customtkinter
+# Atalhos do instalador (Windows)
+pywin32
